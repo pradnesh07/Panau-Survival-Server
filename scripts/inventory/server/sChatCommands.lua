@@ -1,5 +1,7 @@
 Events:Subscribe("PlayerChat", function(args)
 
+    if not IsTest and not IsAdmin(args.player) then return end
+
     local split = args.text:split(" ")
 
     if args.text:sub(1, 5) == "/item" then
@@ -79,6 +81,20 @@ Events:Subscribe("PlayerChat", function(args)
         --end
 
         Chat:Send(args.player, "Removed " .. name .. " [x" .. tostring(amount) .. "]", Color.Green)
+
+    elseif split[1] == "/loot" and tonumber(split[2]) then
+
+        local tier = tonumber(split[2])
+
+        local loot = ItemGenerator:GetLoot(tier)
+        print("Level " .. tostring(tier) .. " Loot")
+    
+        CreateLootbox({
+            position = args.player:GetPosition(),
+            angle = args.player:GetAngle(),
+            tier = tier,
+            contents = loot
+        })
 
     end
     

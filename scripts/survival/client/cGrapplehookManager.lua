@@ -2,12 +2,10 @@ class 'cGrapplehookManager'
 
 function cGrapplehookManager:__init()
 
-	--Game:FireEvent("ply.parachute.enable")
-
 	self.rechargeModifier = 1
 	self.rechargeTime = 4
-	self.charges = SCRYPT(1)
-	self.charges_unencrypted = tonumber(SCRYPT(self.charges))
+    self.charges = xor_cipher(1)
+	self.charges_unencrypted = tonumber(xor_cipher(self.charges))
 	self.max_charges = 3
 	self.currentTime = self.rechargeTime -- Current cooldown time in seconds
 	self.grappleVisualEnabled = true -- If the visual indicator is enabled or not for the grapple
@@ -64,17 +62,15 @@ function cGrapplehookManager:PreTick(args)
 
 		if self.currentTime >= self.rechargeTime then
 
-			local charges_unencrypted = tonumber(SCRYPT(self.charges))
+			local charges_unencrypted = tonumber(xor_cipher(self.charges))
 
 			if charges_unencrypted >= self.max_charges then return end
 
 			charges_unencrypted = charges_unencrypted + 1
 			self.charges_unencrypted = charges_unencrypted
-			self.charges = SCRYPT(charges_unencrypted)
+			self.charges = xor_cipher(charges_unencrypted)
 			self.currentTime = 0
 			LocalPlayer:SetValue("NumGrappleCharges", self.charges_unencrypted)
-
-			--Game:FireEvent("ply.grappling.enable")
 
 		end
 
@@ -99,7 +95,7 @@ function cGrapplehookManager:PreTick(args)
 		if self.charges_unencrypted > 0 then -- If they can use it
 			
 			Events:Fire("FireGrapplehookHit")
-			local charges_unencrypted = tonumber(SCRYPT(self.charges))
+			local charges_unencrypted = tonumber(xor_cipher(self.charges))
 
 			if charges_unencrypted <= 0 or charges_unencrypted > self.max_charges then return false end
 
@@ -107,7 +103,7 @@ function cGrapplehookManager:PreTick(args)
 
 			charges_unencrypted = charges_unencrypted - 1
 			self.charges_unencrypted = charges_unencrypted
-			self.charges = SCRYPT(charges_unencrypted)
+			self.charges = xor_cipher(charges_unencrypted)
 			LocalPlayer:SetValue("NumGrappleCharges", self.charges_unencrypted)
 
 		end
@@ -152,7 +148,7 @@ end
 
 function cGrapplehookManager:Render()
 
-    if Game:GetState() ~= GUIState.Game then
+    if Game:GetState() ~= GUIState.Game or not self.grappleVisualEnabled then
         self.grapple_window:Hide()
         return
     else

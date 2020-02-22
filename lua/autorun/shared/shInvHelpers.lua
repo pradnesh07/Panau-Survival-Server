@@ -40,6 +40,24 @@ if Client then
 
             Inventory.contents[args.cat][args.index] = nil
 
+        elseif args.action == "cat" then
+
+            local contents = {}
+
+            -- Create new shItem and shStack instances for the client (each module does this)
+            for index, v in pairs(args.data.contents) do
+                local items = {}
+
+                for i, j in ipairs(v.stack.contents) do
+                    items[i] = shItem(j)
+                end
+
+                contents[index] = shStack({contents = items, uid = v.stack.uid})
+            end
+
+            Inventory.contents[args.cat] = contents
+            Inventory.slots[args.cat] = args.data.slots
+
         elseif args.action == "slots" then
 
             Inventory.slots = args.slots
@@ -96,11 +114,11 @@ elseif Server then
         
         local contents_array = args.player:GetValue("Inventory").contents
         local contents = {}
-        
+
         -- Create new shItem and shStack instances for the client
-        for category, _ in ipairs(contents_array) do
+        for category, _ in pairs(contents_array) do
             contents[category] = {}
-            for index, v in pairs(args.contents[category]) do
+            for index, v in pairs(contents_array[category]) do
                 local items = {}
 
                 for i, j in ipairs(v.stack.contents) do
@@ -308,12 +326,12 @@ elseif Server then
 
         local contents = Inventory.Get(args)
 
-        print("Inventory contents of " .. args.player)
+        print("Inventory contents of " .. args.player:GetName())
 
         for cat, _ in pairs(contents) do
             print("cat " .. cat)
             for _, stack in pairs(contents[cat]) do
-                print("stack " .. k)
+                print("stack " .. _)
                 for i, item in pairs(stack.contents) do
 
                     print("item " .. i .. " " .. item:ToString())

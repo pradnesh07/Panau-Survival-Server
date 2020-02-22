@@ -4,6 +4,10 @@ function cInventoryUI:__init()
 
     self.open_key = 'G'
     self.steam_id = tostring(LocalPlayer:GetSteamId().id)
+    self.dropping_counter = 0 -- Amount of stacks the player is trying to drop. If > 0, then drop items on inventory close
+    self.dropping_items = {} -- Table of items (cat + index + amount) that the player is trying to drop
+    self.hovered_button = nil -- Button in inventory currently hovered
+    self.pressed_button = nil -- Button that the mouse is currently left clicking
 
     self.bg_colors = 
     {
@@ -12,6 +16,8 @@ function cInventoryUI:__init()
         Equipped_Under = Color(33, 217, 33, 100),
         Use = Color(200,200,200,100)
     }
+
+    self.padding = 4
 
     self.window = BaseWindow.Create("Inventory")
     self.window:SetSize(Vector2(math.max(Render.Size.x / 2, 800), Render.Size.y))
@@ -22,9 +28,10 @@ function cInventoryUI:__init()
 
     self.inv_dimensions = 
     {
-        padding = 4, -- Padding on all sides is the same
+        padding = self.padding, -- Padding on all sides is the same
         text_size = 20,
-        button_size = Vector2(self.window:GetSize().x / #Inventory.config.categories, 40),
+        button_size = Vector2(
+            (self.window:GetSize().x - self.padding * #Inventory.config.categories) / #Inventory.config.categories, 40),
         cat_offsets = {} -- Per category offsets
     }
     
@@ -43,11 +50,24 @@ function cInventoryUI:__init()
         [Action.HeliTurnRight] = true,
         [Action.HeliTurnLeft] = true,
         [Action.VehicleFireLeft] = true,
+        [Action.ThrowGrenade] = true,
         [Action.VehicleFireRight] = true,
-        [Action.ThrowGrenade] = true
+        [Action.Reverse] = true,
+        [Action.UseItem] = true,
+        [Action.GuiPDAToggleAOI] = true,
+        [Action.GrapplingAction] = true,
+        [Action.PickupWithLeftHand] = true,
+        [Action.PickupWithRightHand] = true,
+        [Action.ActivateBlackMarketBeacon] = true,
+        [Action.GuiPDAZoomOut] = true,
+        [Action.GuiPDAZoomIn] = true,
+        [Action.NextWeapon] = true,
+        [Action.PrevWeapon] = true,
+        [Action.ExitVehicle] = true
     }
 
     Events:Subscribe("KeyUp", self, self.KeyUp)
+    Events:Subscribe("MouseScroll", self, self.MouseScroll)
     Events:Subscribe("SetInventoryState", self, self.SetInventoryState)
     
 end
@@ -76,6 +96,11 @@ function cInventoryUI:Update(args)
         self:UpdateAllCategoryTitles()
     elseif args.action == "slots" then
         self:UpdateAllCategoryTitles()
+    elseif args.action == "cat" then
+        for i = 1, Inventory.config.max_slots_per_category do
+            self:PopulateEntry({index = i, cat = args.cat})
+        end
+        self:UpdateAllCategoryTitles()
     end
 
 end
@@ -84,8 +109,21 @@ function cInventoryUI:GetDurabilityColor(percent)
     return Color.FromHSV(120 * percent, 0.85, 0.85)
 end
 
-function cInventoryUI:GetItemNameWithAmount(stack)
-    return string.format("%s (%i)", stack:GetProperty("name"), stack:GetAmount())
+-- Gets formatted stack name for inventory/loot, like: Lockpick (50)
+function cInventoryUI:GetItemNameWithAmount(stack, index)
+    return string.format("%s (%s)", stack:GetProperty("name"), tostring(self:GetItemButtonStackAmount(stack, index)))
+end
+
+-- Returns 5/10 if dropping, otherwise returns the amount in the stack
+function cInventoryUI:GetItemButtonStackAmount(stack, index)
+    local itemWindow = self.window:FindChildByName("itemwindow_"..stack:GetProperty("category")..index, true)
+    local button = itemWindow:FindChildByName("button", true)
+
+    if button:GetDataBool("dropping") then -- If they are dropping this stack
+        return string.format("%i/%i", button:GetDataNumber("drop_amount"), stack:GetAmount())
+    else -- Otherwise
+        return stack:GetAmount()
+    end
 end
 
 -- Updates an entry in the inventory so it matches the current inventory
@@ -93,7 +131,7 @@ end
 -- the loot, and set args.loot to true
 function cInventoryUI:PopulateEntry(args)
 
-    local itemwindow = args.window
+    local window = args.window or self.window
 
     local stack
 
@@ -103,9 +141,8 @@ function cInventoryUI:PopulateEntry(args)
         stack = LootManager.current_box.contents[args.index]
     end
 
-    if not itemwindow then
-        itemwindow = self.window:FindChildByName("itemwindow_"..stack:GetProperty("category")..args.index, true)
-    end
+    local cat = args.loot and "loot" or (args.cat or stack:GetProperty("category"))
+    local itemwindow = window:FindChildByName("itemwindow_"..cat..args.index, true)
 
     local button = itemwindow:FindChildByName("button", true)
     local button_bg = itemwindow:FindChildByName("button_bg", true)
@@ -121,7 +158,7 @@ function cInventoryUI:PopulateEntry(args)
     end
 
     local item_name = stack:GetProperty("name")
-    button:SetText(self:GetItemNameWithAmount(stack))
+    button:SetText(self:GetItemNameWithAmount(stack, args.index))
     --[[button_bg:SetColor(
         stack.contents[1].equipped and self.bg_colors.Equipped 
         or (stack:GetOneEquipped() and self.bg_colors.Equipped_Under or self.bg_colors.None))--]]
@@ -155,10 +192,6 @@ function cInventoryUI:PopulateEntry(args)
 
 end
 
-function cInventoryUI:WindowClosed()
-    self:ToggleVisible()
-end
-
 function cInventoryUI:CreateInventory()
 
     self.itemWindows = {}
@@ -170,8 +203,10 @@ function cInventoryUI:CreateInventory()
         self.itemWindows[cat_data.name] = {}
         self.inv_dimensions[cat_data.name] = Vector2(
             self.inv_dimensions.button_size.x * (index - 1) +
-            self.inv_dimensions.padding * (index - 1), 0) 
+            self.inv_dimensions.padding * (index + 1), 0) 
     end
+
+    self.inv_dimensions["loot"] = Vector2(0, 0)
 
     -- Create entries for each item
     for _, cat_data in pairs(Inventory.config.categories) do
@@ -227,24 +262,31 @@ end
 function cInventoryUI:GetCategoryTitlePosition(cat)
     local index = Inventory.contents and #Inventory.contents[cat] or 0
     return Vector2(
-        self.inv_dimensions[cat].x - self.inv_dimensions.padding * #Inventory.config.categories,
+        self.inv_dimensions[cat].x - self.inv_dimensions.padding * 2,
         self.window:GetSize().y - (self.inv_dimensions.button_size.y * index)
         - self.inv_dimensions.padding * (index + 1) - self.categoryTitles[cat]:GetSize().y
     )
 end
 
 function cInventoryUI:GetItemWindowPosition(cat, index)
-    return Vector2(
-        self.inv_dimensions[cat].x - self.inv_dimensions.padding * #Inventory.config.categories,
-        self.window:GetSize().y - (self.inv_dimensions.button_size.y * index)
-        - self.inv_dimensions.padding * index
-    )
+    if cat == "loot" then
+        return Vector2(
+            0,
+            self.inv_dimensions.button_size.y * (index - 1) + (self.inv_dimensions.padding * index)
+        )
+    else
+        return Vector2(
+            self.inv_dimensions[cat].x - self.inv_dimensions.padding * 2,
+            self.window:GetSize().y - (self.inv_dimensions.button_size.y * index)
+            - self.inv_dimensions.padding * index
+        )
+    end
 end
 
 -- Creates and returns a new item window. Can be used for loot and inventory
-function cInventoryUI:CreateItemWindow(cat, index)
+function cInventoryUI:CreateItemWindow(cat, index, parent)
 
-    local itemWindow = BaseWindow.Create(self.window, "itemwindow_"..cat..index)
+    local itemWindow = BaseWindow.Create(parent or self.window, "itemwindow_"..cat..index)
     itemWindow:SetSize(self.inv_dimensions.button_size)
     itemWindow:SetPosition(self:GetItemWindowPosition(cat, index))
 
@@ -268,8 +310,8 @@ function cInventoryUI:CreateItemWindow(cat, index)
     durability:Hide()
 
     local equip_outer = Rectangle.Create(itemWindow, "equip_outer")
-    equip_outer:SetSizeAutoRel(Vector2(20, 20))
-    equip_outer:SetPositionRel(Vector2(0.05, 0.05))
+    equip_outer:SetSize(Vector2(10, 10))
+    equip_outer:SetPosition(Vector2(4, 4))
     equip_outer:SetColor(Color.Black)
 
     local equip_inner = Rectangle.Create(equip_outer, "equip_inner")
@@ -302,31 +344,122 @@ function cInventoryUI:CreateItemWindow(cat, index)
     equip_outer:Hide()
 
     button:SetDataNumber("stack_index", index)
+    button:SetDataString("stack_category", cat)
     button:SetDataBool("dropping", false)
+    button:SetDataNumber("drop_amount", 0)
     itemWindow:Hide()
 
     button:Subscribe("Press", self, self.LeftClickItemButton)
+    button:Subscribe("Down", self, self.LeftClickItemButtonDown)
+    button:Subscribe("Up", self, self.LeftClickItemButtonUp)
     button:Subscribe("RightPress", self, self.RightClickItemButton)
     button:Subscribe("HoverEnter", self, self.HoverEnterButton)
     button:Subscribe("HoverLeave", self, self.HoverLeaveButton)
 
     button:BringToFront()
 
+    return itemWindow
+
+end
+
+function cInventoryUI:LeftClickItemButtonDown(button)
+    self.pressed_button = button
+    
+    if button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
+end
+
+function cInventoryUI:LeftClickItemButtonUp(button)
+    self.pressed_button = nil
+    
+    if button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
 end
 
 function cInventoryUI:HoverEnterButton(button)
     -- Called when the mouse hovers over a button
-    -- use local stack = Inventory.contents[args.button:GetDataNumber("stack_index")] to get stack
+    self.hovered_button = button
+    
+    if button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
 end
 
 function cInventoryUI:HoverLeaveButton(button)
     -- Called when the mouse stops hovering over a button
+    self.hovered_button = nil
+
+    if button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
+    if self.pressed_button and self.dropping_counter == 0 then -- Can't move items if dropping one
+        -- If they are holding an item to try to move it
+        local abs_btn_pos = self.pressed_button:GetParent():GetPosition() + self.window:GetPosition()
+        local diff = Mouse:GetPosition().y - abs_btn_pos.y
+        local swap_dir = diff < 0 and 1 or -1 -- Direction of swap
+
+        local cat = self.pressed_button:GetDataString("stack_category")
+        local index = self.pressed_button:GetDataNumber("stack_index")
+
+        if index + swap_dir < 0 then return end
+        if not Inventory.contents[cat][index + swap_dir] then return end
+
+        Network:Send("Inventory/Swap" .. self.steam_id, {cat = cat, from = index, to = index + swap_dir})
+
+        self.pressed_button = nil
+    end
 end
 
 function cInventoryUI:RightClickItemButton(button)
+
+    if button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
     -- Called when a button is right clicked
+    local cat = button:GetDataString("stack_category")
+    local index = button:GetDataNumber("stack_index")
+
+    if not Inventory.contents[cat][index] then
+        error("cInventoryUI:RightClickItemButton failed: no stack was found")
+    end
+
+    -- Splitting stacks / recombining stacks
+    if button:GetDataBool("dropping") and Key:IsDown(VirtualKey.LShift) then
+        local stack = Inventory.contents[cat][index]
+        if not stack then return end
+
+        local drop_amount = button:GetDataNumber("drop_amount")
+
+        Network:Send("Inventory/Split" .. self.steam_id, {cat = cat, index = index, amount = drop_amount})
+    end
+
+    local amount = Inventory.contents[cat][index]:GetAmount()
+    button:SetDataNumber("drop_amount", amount) -- Reset dropping amount when they right click it
+    self:ToggleDroppingItemButton(button)
+
+    self.dropping_counter = button:GetDataBool("dropping") and self.dropping_counter + 1 or self.dropping_counter - 1
+        
+    -- Add or remove from self.dropping_items depending on if they are dropping it or not
+    self.dropping_items[cat .. tostring(index)] = button:GetDataBool("dropping") and {cat = cat, index = index, amount = amount} or nil
+
+end
+
+function cInventoryUI:ToggleDroppingItemButton(button)
+
     button:SetDataBool("dropping", not button:GetDataBool("dropping"))
     local colors = button:GetDataBool("dropping") and InventoryUIStyle.colors.dropping or InventoryUIStyle.colors.default
+
+    local cat = button:GetDataString("stack_category")
+    local index = button:GetDataNumber("stack_index")
+    local amount = Inventory.contents[cat][index]:GetAmount()
+    button:SetDataNumber("drop_amount", amount) -- Reset dropping amount when they right click it
 
     button:SetTextColor(colors.text)
     button:SetTextNormalColor(colors.text)
@@ -334,6 +467,60 @@ function cInventoryUI:RightClickItemButton(button)
     button:SetTextPressedColor(colors.text_hover)
     button:GetParent():FindChildByName("button_bg", true):SetColor(colors.background)
     self:SetItemWindowBorderColor(button:GetParent(), colors.border)
+    button:SetText(self:GetItemNameWithAmount(Inventory.contents[cat][index], index))
+
+end
+
+function cInventoryUI:ShiftStack(button)
+    
+    -- Trying to shift a stack
+    local cat = button:GetDataString("stack_category")
+    local index = button:GetDataNumber("stack_index")
+    local stack = Inventory.contents[cat][index]
+    if not stack then return end
+    if stack:GetAmount() == 1 then return end
+
+    Network:Send("Inventory/Shift" .. self.steam_id, {cat = cat, index = index})
+    
+end
+
+function cInventoryUI:MouseScroll(args)
+
+    if not self.hovered_button then return end -- Not hovering over a button
+
+    if self.hovered_button:GetDataString("stack_category") == "loot" then
+        return
+    end
+
+    if self.dropping_counter == 0 then
+        -- Shifting through stack
+        self:ShiftStack(self.hovered_button)
+
+    else
+        -- Dropping items
+        if not self.hovered_button then return end -- Not hovering over a button
+        if not self.hovered_button:GetDataBool("dropping") then return end -- Not scrolling on an item they are dropping
+
+        local cat = self.hovered_button:GetDataString("stack_category")
+        local index = self.hovered_button:GetDataNumber("stack_index")
+
+        local change = args.delta < 0 and -1 or 1 -- Normalizing the change
+        local new_drop_amount = self.hovered_button:GetDataNumber("drop_amount") + change
+
+        -- Bounds on dropping the item
+        if new_drop_amount == 0 then
+            new_drop_amount = Inventory.contents[cat][index]:GetAmount()
+        elseif new_drop_amount > Inventory.contents[cat][index]:GetAmount() then
+            new_drop_amount = 1
+        end
+
+        self.hovered_button:SetDataNumber("drop_amount", new_drop_amount)
+        self.hovered_button:SetText(self:GetItemNameWithAmount(Inventory.contents[cat][index], index))
+
+        -- Update dropping amount
+        self.dropping_items[cat .. tostring(index)].amount = new_drop_amount
+
+    end
 end
 
 function cInventoryUI:SetItemWindowBorderColor(itemWindow, border_color)
@@ -343,85 +530,38 @@ function cInventoryUI:SetItemWindowBorderColor(itemWindow, border_color)
     itemWindow:FindChildByName("border_left", true):SetColor(border_color)
 end
 
-function cInventoryUI:ConfirmAmountButtonPress(button)
-
-    if not self.current_right_clicked then return end
-
-    local index = self.current_right_clicked:GetDataNumber("stack_index")
-    local amount = math.round(self.input_slider:GetValue())
-
-    local stack = Inventory.contents[index]
-    if not stack then return end
-
-    if amount < 1 or amount > stack:GetAmount() then return end
-
-    Network:Send("Inventory/" .. self.rightClickMenuAction .. self.steam_id, {index = index, amount = amount})
-
-end
-
 function cInventoryUI:LeftClickItemButton(button)
 
-    local index = button:GetDataNumber("stack_index")
-    local stack = Inventory.contents[index]
-    if not stack then return end
-    
-    if stack:GetProperty("can_equip") then
+    if self.hovered_button ~= button then return end -- Only hovered button receives mouse clicks
 
-        Network:Send("Inventory/ToggleEquipped" .. self.steam_id, {index = index})
-
-    elseif stack:GetProperty("can_use") then
-
-        Network:Send("Inventory/Use" .. self.steam_id, {index = index})
-
+    -- Clicking on an item in loot
+    if button:GetDataString("stack_category") == "loot" then
+        ClientInventory.lootbox_ui:ClickItemButton(button)
+        return
     end
 
-end
+    if button:GetDataBool("dropping") then
+        -- Adjusting the drop amount
+        self:MouseScroll({delta = 1}) -- Simulate mousescroll to change drop amount
+    else
+        if Key:IsDown(VirtualKey.LShift) then
+            -- Trying to shift a stack
+            self:ShiftStack(button)
+        else
+            -- Equipping or using an item
+            local cat = button:GetDataString("stack_category")
+            local index = button:GetDataNumber("stack_index")
+            local stack = Inventory.contents[cat][index]
+            if not stack then return end
 
-function cInventoryUI:ClickRightClickMenuButton(button)
-
-    if not self.current_right_clicked then return end
-
-    local index = self.current_right_clicked:GetDataNumber("stack_index")
-    local stack = Inventory.contents[index]
-    if not stack then return end
-
-    local action = button:GetText()
-    self.rightClickMenuAction = action
-
-    if action == "Drop" then
-
-        Mouse:SetPosition(Render.Size / 2)
-
-    elseif action == "Split" then
-
-        Mouse:SetPosition(Render.Size / 2)
-
-    elseif action == "Shift" then
-
-        Network:Send("Inventory/Shift" .. self.steam_id, {index = index})
-
-    elseif action == "Equip" or action == "Unequip" then
-
-        Network:Send("Inventory/ToggleEquipped" .. self.steam_id, {index = index})
-
-    elseif action == "Use" then
-
-        Network:Send("Inventory/Use" .. self.steam_id, {index = index})
-
-    elseif action == "Move Left" then
-
-        Network:Send("Inventory/Swap" .. self.steam_id, {from = index, to = index - 1})
-
-    elseif action == "Move Right" then
-
-        Network:Send("Inventory/Swap" .. self.steam_id, {from = index, to = index + 1})
-
-    elseif action == "Merge" then
-
-        Network:Send("Inventory/Combine" .. self.steam_id, {index = index})
-
+            if stack:GetProperty("can_equip") then
+                Network:Send("Inventory/ToggleEquipped" .. self.steam_id, {cat = cat, index = index})
+            else
+                Network:Send("Inventory/Use" .. self.steam_id, {cat = cat, index = index})
+            end
+        end
+        
     end
-
 
 end
 
@@ -429,13 +569,41 @@ function cInventoryUI:LocalPlayerInput(args)
     if self.blockedActions[args.input] then return false end
 end
 
+-- Called when the inventory is closed
+function cInventoryUI:InventoryClosed()
+
+    -- If we're trying to drop something
+    if self.dropping_counter > 0 then
+        self.dropping_counter = 0
+
+        -- If there are actually items to drop
+        if count_table(self.dropping_items) > 0 then
+
+            -- Reset UI
+            for _, data in pairs(self.dropping_items) do
+                self:ToggleDroppingItemButton(
+                    self.window:FindChildByName("itemwindow_"..data.cat..tostring(data.index), true):FindChildByName("button", true))
+            end
+
+            -- Send to server to drop
+            Network:Send("Inventory/Drop" .. self.steam_id, {stacks = self.dropping_items})
+
+        end
+
+        self.dropping_items = {}
+        -- loop through all items, find those that were marked for dropping (with amounts)
+    end
+
+end
+
 function cInventoryUI:ToggleVisible()
 
-    if self.window:GetVisible() then
+    if self.window:GetVisible() then -- Close inventory
         self.window:Hide()
         Events:Unsubscribe(self.LPI)
         self.LPI = nil
-    else
+        self:InventoryClosed()
+    else -- Open inventory
         self.window:Show()
         Mouse:SetPosition(Render.Size / 2)
         self.LPI = Events:Subscribe("LocalPlayerInput", self, self.LocalPlayerInput)

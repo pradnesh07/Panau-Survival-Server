@@ -25,10 +25,9 @@ function sInventory:__init(player)
     table.insert(self.network_events, Network:Subscribe("Inventory/Shift" .. self.steamID, self, self.ShiftStack))
     table.insert(self.network_events, Network:Subscribe("Inventory/ToggleEquipped" .. self.steamID, self, self.ToggleEquipped))
     table.insert(self.network_events, Network:Subscribe("Inventory/Use" .. self.steamID, self, self.UseItem))
-    table.insert(self.network_events, Network:Subscribe("Inventory/Drop" .. self.steamID, self, self.DropStack))
+    table.insert(self.network_events, Network:Subscribe("Inventory/Drop" .. self.steamID, self, self.DropStacks))
     table.insert(self.network_events, Network:Subscribe("Inventory/Split" .. self.steamID, self, self.SplitStack))
     table.insert(self.network_events, Network:Subscribe("Inventory/Swap" .. self.steamID, self, self.SwapStack))
-    table.insert(self.network_events, Network:Subscribe("Inventory/Combine" .. self.steamID, self, self.CombineStack))
 
 end
 
@@ -71,40 +70,40 @@ function sInventory:Load()
 
 end
 
-function sInventory:ShiftStack(args, player) -- TODO: update
+function sInventory:ShiftStack(args, player)
 
     if not self:CanPlayerPerformOperations(player) then return end
-    if not args.index then return end
-    if not self.contents[args.index] then return end
+    if not args.index or not args.cat then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.index] then return end
 
-    self.contents[args.index]:Shift()
-    self:Sync({index = args.index, stack = self.contents[args.index], sync_stack = true})
+    self.contents[args.cat][args.index]:Shift()
+    self:Sync({index = args.index, stack = self.contents[args.cat][args.index], sync_stack = true})
 
 end
 
-function sInventory:ToggleEquipped(args, player) -- TODO: update
+function sInventory:ToggleEquipped(args, player)
 
     if not self:CanPlayerPerformOperations(player) then return end
-    if not args.index then return end
-    if not self.contents[args.index] then return end
-    if not self.contents[args.index]:GetProperty("can_equip") then return end
+    if not args.index or not args.cat then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.index] then return end
+    if not self.contents[args.cat][args.index]:GetProperty("can_equip") then return end
 
     -- check for items of same equip type and unequip them
-    local equip_type = self.contents[args.index]:GetProperty("equip_type")
+    local equip_type = self.contents[args.cat][args.index]:GetProperty("equip_type")
     local can_equip = true
 
     if equip_type ~= "grapple_upgrade" then
-        for stack_index, stack in pairs(self.contents) do
-            if stack then
+        for cat, _ in pairs(self.contents) do
+            for stack_index, stack in pairs(self.contents[cat]) do
                 for item_index, item in pairs(stack.contents) do
 
                     if item.equipped and item.equip_type == equip_type
-                    and item.uid ~= self.contents[args.index].contents[1].uid then
+                    and item.uid ~= self.contents[args.cat][args.index].contents[1].uid then
 
                         item.equipped = false
-                        self:Sync({index = stack_index, stack = self.contents[stack_index], sync_stack = true})
+                        self:Sync({index = stack_index, stack = self.contents[cat][stack_index], sync_stack = true})
                         Events:Fire("Inventory/ToggleEquipped", 
-                            {player = self.player, item = self.contents[stack_index].contents[1]:Copy():GetSyncObject()})
+                            {player = self.player, item = self.contents[cat][stack_index].contents[1]:Copy():GetSyncObject()})
 
                     end
 
@@ -115,12 +114,12 @@ function sInventory:ToggleEquipped(args, player) -- TODO: update
         
         local num_upgrades = 0
 
-        for stack_index, stack in pairs(self.contents) do
-            if stack then
+        for cat, _ in pairs(self.contents) do
+            for index, stack in pairs(self.contents[cat]) do
                 for item_index, item in pairs(stack.contents) do
 
                     if item.equipped and item.equip_type == equip_type
-                    and item.uid ~= self.contents[args.index].contents[1].uid then
+                    and item.uid ~= self.contents[args.cat][args.index].contents[1].uid then
 
                         num_upgrades = num_upgrades + 1
                         
@@ -133,59 +132,69 @@ function sInventory:ToggleEquipped(args, player) -- TODO: update
     end
 
     -- Toggle equipped if it's not a grapple upgrade OR if we can equip a grapple upgrade OR if we are unequipping an upgrade
-    if equip_type ~= "grapple_upgrade" or can_equip or self.contents[args.index].contents[1].equipped then
-        self.contents[args.index].contents[1].equipped = not self.contents[args.index].contents[1].equipped
+    if equip_type ~= "grapple_upgrade" or can_equip or self.contents[args.cat][args.index].contents[1].equipped then
+        self.contents[args.cat][args.index].contents[1].equipped = not self.contents[args.cat][args.index].contents[1].equipped
     else
         Chat:Send(self.player, "you must unequip first", Color.Red)
         -- tell player they have to unequip a grapple upgrade before equipping another one
     end
 
-    self:Sync({index = args.index, stack = self.contents[args.index], sync_stack = true})
+    self:Sync({index = args.index, stack = self.contents[args.cat][args.index], sync_stack = true})
 
     Events:Fire("Inventory/ToggleEquipped", 
-        {player = self.player, item = self.contents[args.index].contents[1]:Copy():GetSyncObject()})
+        {player = self.player, item = self.contents[args.cat][args.index].contents[1]:Copy():GetSyncObject()})
 
 end
 
-function sInventory:UseItem(args, player) -- TODO: update
+function sInventory:UseItem(args, player)
 
     if not self:CanPlayerPerformOperations(player) then return end
-    if not args.index then return end
-    if not self.contents[args.index] then return end
-    if not self.contents[args.index]:GetProperty("can_use") then return end
+    if not args.index or not args.cat then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.index] then return end
+    if not self.contents[args.cat][args.index]:GetProperty("can_use") then return end
 
-    local copy = self.contents[args.index].contents[1]:Copy()
+    local copy = self.contents[args.cat][args.index].contents[1]:Copy()
     copy.amount = 1
 
     Events:Fire("Inventory/UseItem", 
-        {player = self.player, item = copy:GetSyncObject(), index = args.index})
+        {player = self.player, item = copy:GetSyncObject(), cat = args.cat, index = args.index})
 
 end
 
-function sInventory:DropStack(args, player) -- TODO: update
+function sInventory:DropStacks(args, player)
+    
+    if not args.stacks then return end
+    if count_table(args.stacks) == 0 then return end
+
+    for _, data in pairs(args.stacks) do
+        self:DropStack(data, player)
+    end
+
+end
+
+function sInventory:DropStack(args, player)
 
     if not self:CanPlayerPerformOperations(player) then return end
     if player ~= self.player then return end
-    if not self.contents[args.index] then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.index] then return end
     if not args.amount or args.amount < 1 then return end
 
     if not tonumber(tostring(args.amount)) then
         args.amount = 1
     end
 
-    if args.amount < 1 then return end
-
-    local stack = self.contents[args.index]
+    local stack = self.contents[args.cat][args.index]
 
     if not stack then return end
     if args.amount > stack:GetAmount() then return end
 
     if player:InVehicle() then return end -- TODO drop in vehicle storage
 
+    -- Not dropping the entire stack
     if args.amount < stack:GetAmount() then
 
-        local split_stack = self.contents[args.index]:Split(args.amount)
-        self:Sync({index = args.index, stack = self.contents[args.index], sync_stack = true})
+        local split_stack = self.contents[args.cat][args.index]:Split(args.amount)
+        self:Sync({index = args.index, stack = self.contents[args.cat][args.index], sync_stack = true})
 
         self:CheckIfStackHasOneEquippedThenUnequip(split_stack)
 
@@ -196,7 +205,7 @@ function sInventory:DropStack(args, player) -- TODO: update
             contents = {[1] = split_stack}
         })
 
-    else
+    else -- Dropping the entire stack
 
         self:CheckIfStackHasOneEquippedThenUnequip(stack)
 
@@ -207,104 +216,62 @@ function sInventory:DropStack(args, player) -- TODO: update
             contents = {[1] = stack}
         })
 
-        self:RemoveStack({stack = stack})
+        self:RemoveStack({stack = stack, index = args.index})
 
     end
 
 end
 
-function sInventory:SplitStack(args, player) -- TODO: update
+function sInventory:SplitStack(args, player)
 
     if not self:CanPlayerPerformOperations(player) then return end
     if player ~= self.player then return end
-    if not self.contents[args.index] then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.index] then return end
     if not args.amount or args.amount < 1 then return end
 
     if not tonumber(tostring(args.amount)) then
         args.amount = 1
     end
 
-    if args.amount >= self.contents[args.index]:GetAmount() or args.amount < 1 then return end
+    if args.amount > self.contents[args.cat][args.index]:GetAmount() or args.amount < 1 then return end
     
-    -- TODO regenerate uids of items in new split stack
-    -- not really an issue right now because we use stack indexes then look inside those for uids
-    local split_stack = self.contents[args.index]:Split(args.amount)
-    self:Sync({index = args.index, stack = self.contents[args.index], sync_stack = true})
+    if self.contents[args.cat][args.index]:GetAmount() == args.amount then
+        -- Trying to recombine a stack
+        local stack = self.contents[args.cat][args.index]:Copy()
+        self:RemoveStack({cat = args.cat, stack = stack:Copy(), index = args.index, amount = args.amount})
+        
+        self:AddStack({stack = stack})
 
-    local return_stack = self:AddStack({stack = split_stack, new_space = true})
+    else
 
-    if return_stack then
-        self:AddStack({stack = return_stack})
-    end
+        local split_stack = self.contents[args.cat][args.index]:Split(args.amount)
+        self:Sync({index = args.index, stack = self.contents[args.cat][args.index], sync_stack = true})
 
-end
+        local return_stack = self:AddStack({stack = split_stack, new_space = true})
 
-function sInventory:SwapStack(args, player) -- TODO: update
-
-    if not self:CanPlayerPerformOperations(player) then return end
-    if not args.from or not args.to then return end
-    if not self.contents[args.from] then return end
-
-    local stack = self.contents[args.from]
-
-    -- Cannot make it go in a separate category
-    if stack:GetProperty("category") ~= self:GetCategoryFromIndex(args.to) then return end
-
-    -- TODO regenerate uids of items in new split stack
-    -- not really an issue right now because we use stack indexes then look inside those for uids
-    local stack_copy = self.contents[args.from]:Copy()
-
-    local swap_with_empty = not self.contents[args.to]
-
-    if swap_with_empty then return end
-
-    self.contents[args.from] = self.contents[args.to]
-    self.contents[args.to] = stack_copy
-
-    self:Sync({index = args.from, stack = self.contents[args.from], sync_stack = true})
-    self:Sync({index = args.to, stack = self.contents[args.to], sync_stack = true})
-
-end
-
-function sInventory:CombineStack(args, player) -- TODO: update
-
-    if not self:CanPlayerPerformOperations(player) then return end
-    if not args.index then return end
-    if not self.contents[args.index] then return end
-
-    local stack = self.contents[args.index]
-    local name = stack:GetProperty("name")
-
-    if not stack or stack:GetAmount() >= stack:GetProperty("stacklimit") then return end
-
-    local cat_info = self:GetCategoryInfo(stack:GetProperty("category"))
-    
-    for i = cat_info.start_index, cat_info.end_index do
-
-        local check_stack = self.contents[i]
-
-        if check_stack and check_stack:GetProperty("name") == name 
-        and check_stack:GetAmount() < check_stack:GetProperty("stacklimit")
-        and args.index ~= i then
-
-            local return_stack = stack:AddStack(check_stack)
-
-            if return_stack then
-                self.contents[i] = return_stack
-                self:Sync({index = i, stack = return_stack, sync_stack = true})
-            else
-                self.contents[i] = nil
-                self:Sync({index = i, sync_remove = true})
-                
-                self:RemoveHotbarIndex(i)
-                self:UpdateHotbar()
-            end
-
+        if return_stack then
+            self:AddStack({stack = return_stack})
         end
 
     end
 
-    self:Sync({index = args.index, stack = self.contents[args.index], sync_stack = true})
+
+end
+
+function sInventory:SwapStack(args, player)
+
+    if not self:CanPlayerPerformOperations(player) then return end
+    if not args.from or not args.to then return end
+    if not self.contents[args.cat] or not self.contents[args.cat][args.from] or not self.contents[args.cat][args.to] then return end
+
+    local stack = self.contents[args.cat][args.from]
+
+    local stack_copy = self.contents[args.cat][args.from]:Copy()
+
+    self.contents[args.cat][args.from] = self.contents[args.cat][args.to]
+    self.contents[args.cat][args.to] = stack_copy
+
+    self:Sync({cat = args.cat, sync_cat = true})
 
 end
 
@@ -406,14 +373,16 @@ function sInventory:ModifyStackRemote(args)
 
 end
 
-function sInventory:ModifyDurabilityRemote(args) -- TODO: update
+function sInventory:ModifyDurabilityRemote(args)
 
     if args.player ~= self.player then
         error("sInventory:ModifyDurabilityRemote failed: player does not match")
         return
     end
 
-    for index, stack in pairs(self.contents) do
+    local cat = args.item.category
+
+    for index, stack in pairs(self.contents[cat]) do
 
         for _, item in pairs(stack.contents) do
 
@@ -424,8 +393,6 @@ function sInventory:ModifyDurabilityRemote(args) -- TODO: update
                     self:Sync({index = index, stack = stack, sync_stack = true})
                 else
                     self:RemoveItem({item = item, index = index})
-                    self:RemoveHotbarIndex(index)
-                    self:UpdateHotbar()
                 end
 
                 return
@@ -538,9 +505,20 @@ function sInventory:RemoveStack(args)
 
             self:CheckIfStackHasOneEquippedThenUnequip(self.contents[cat][args.index])
 
-            self.contents[cat][args.index] = nil
-            stack = nil
-            self:Sync({index = args.index, sync_remove = true})
+            -- If we are not removing the last item
+            if args.index < #self.contents[cat] then
+
+                self:ShiftItemsDown(cat, args.index)
+                self:Sync({sync_cat = true, cat = cat}) -- Category sync for less network requests
+
+            else
+
+                self.contents[cat][args.index] = nil
+                stack = nil
+                self:Sync({index = args.index, cat = cat, sync_remove = true})
+
+            end
+
 
         end
 
@@ -552,9 +530,15 @@ function sInventory:RemoveStack(args)
                 
                 self:CheckIfStackHasOneEquippedThenUnequip(self.contents[cat][_index])
 
-                self.contents[cat][_index] = nil
-                args.stack = nil
-                self:Sync({index = _index, sync_remove = true})
+                if _index < #self.contents[cat] then
+                    self:ShiftItemsDown(cat, _index)
+                    self:Sync({sync_cat = true, cat = cat})
+                else
+                    self.contents[cat][_index] = nil
+                    args.stack = nil
+                    self:Sync({index = _index, cat = cat, sync_remove = true})
+                end
+
                 break
             end
 
@@ -575,8 +559,14 @@ function sInventory:RemoveStack(args)
                         
                         self:CheckIfStackHasOneEquippedThenUnequip(self.contents[cat][i])
 
-                        self.contents[cat][i] = nil
-                        self:Sync({index = i, sync_remove = true})
+                        if i < #self.contents[cat] then
+                            self:ShiftItemsDown(cat, i)
+                            self:Sync({sync_cat = true, cat = cat})
+                        else
+                            self.contents[cat][i] = nil
+                            self:Sync({index = i, cat = cat, sync_remove = true})
+                        end
+
                     end
 
                     -- Got more items to remove, so keep going
@@ -601,6 +591,18 @@ function sInventory:RemoveStack(args)
 
     end
 
+end
+
+-- Shifts items in a category down incase one in the middle was removed
+-- This WILL remove the stack within index
+function sInventory:ShiftItemsDown(cat, index)
+    local temp_index = index
+    local contents_amount = #self.contents[cat] - 1
+    while temp_index <= contents_amount do
+        self.contents[cat][temp_index] = self.contents[cat][temp_index + 1]:Copy() -- Copy items into new slot
+        temp_index = temp_index + 1
+    end
+    self.contents[cat][contents_amount + 1] = nil -- Remove old top item
 end
 
 function sInventory:CheckIfStackHasOneEquippedThenUnequip(stack)
@@ -650,20 +652,24 @@ function sInventory:Sync(args)
         end
     end
 
-    if args.sync_full then
+    if args.sync_full then -- Sync entire inventory
         Network:Send(self.player, "InventoryUpdated", 
             {action = "full", data = self:GetSyncObject()})
-    elseif args.sync_stack then
+    elseif args.sync_stack then -- Sync a single stack
         Network:Send(self.player, "InventoryUpdated", 
             {action = "update", cat = args.stack:GetProperty("category"), stack = args.stack:GetSyncObject(), index = args.index})
-    elseif args.sync_remove then
+    elseif args.sync_remove then -- Sync the removal of a stack (only used if it was the top stack)
         Network:Send(self.player, "InventoryUpdated", 
-            {action = "remove", cat = args.stack:GetProperty("category"), index = args.index})
-    elseif args.sync_slots then
+            {action = "remove", cat = args.cat, index = args.index})
+    elseif args.sync_cat then -- Sync an entire category of items
+        Network:Send(self.player, "InventoryUpdated", 
+            {action = "cat", cat = args.cat, data = self:GetCategorySyncObject(args.cat)})
+    elseif args.sync_slots then -- Sync ONLY slots
         Network:Send(self.player, "InventoryUpdated", 
             {action = "slots", slots = self.slots})
     end
 
+    -- If initial sync was done already, then update the database with the new info
     if self.initial_sync then
         self:UpdateDB()
     end
@@ -836,6 +842,14 @@ function sInventory:GetSyncObject()
 
     return {contents = data, slots = self.slots}
 
+end
+
+function sInventory:GetCategorySyncObject(cat)
+    local contents = {}
+    for k,v in pairs(self.contents[cat]) do
+        contents[k] = {stack = v:GetSyncObject(), index = k}
+    end
+    return {contents = contents, slots = self.slots[cat]}
 end
 
 function splitstr2(s, delimiter)

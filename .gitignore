@@ -10,6 +10,7 @@ minidumps
 /libsteam.so
 /liblua.so
 Jcmp-Server
+logs
 steamapps
 _CommonRedist
 appcache
@@ -27,3 +28,4 @@ thirdpartylegalnotices.txt
 tier0_s.dll
 vstdlib_s.dll
 config.lua
+*.vdf
