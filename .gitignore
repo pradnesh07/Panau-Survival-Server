@@ -9,7 +9,6 @@ minidumps
 /libsteam_api.so
 /libsteam.so
 /liblua.so
-scripts/discordbridge/discordtojcmp.lua
 Jcmp-Server
 logs
 steamapps
